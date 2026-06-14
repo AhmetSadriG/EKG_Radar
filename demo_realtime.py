@@ -1,17 +1,16 @@
 """
-Gercek zamanli mmWave Radar EKG Demo
-=====================================
-Kaydedilmis session verisini canli streaming gibi oynatir.
-Pencere her STEP_SIZE frame'de bir guncellenir.
+Real-Time mmWave Radar ECG Demo
+================================
+Plays back a recorded radar session as a live stream.
+Window updates every STEP_SIZE frames.
 
-Kullanim:
-  python demo_realtime.py              # varsayilan: s45, normal hiz
+Usage:
+  python demo_realtime.py              # random session, 2x speed
   python demo_realtime.py --session 59
-  python demo_realtime.py --speed 3   # 3x hizli
-  python demo_realtime.py --session 45 --speed 2 --no-ecg  # ECG gizli (gercek demo icin)
+  python demo_realtime.py --speed 3
 """
 
-import os, sys, argparse, warnings
+import os, sys, argparse, warnings, random, glob
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
@@ -28,8 +27,21 @@ from scipy.signal import welch
 FS        = 200.0      # Hz — radar frame rate
 WIN_SIZE  = 640        # samples per window (~3.2 s)
 STEP_SIZE = 100        # frames per animation step (~0.5 s)
-DISPLAY_S = 10.0       # saniye: ekranda goruntulenen sure
-DISP_LEN  = int(DISPLAY_S * FS)   # ornek sayisi
+DISPLAY_S = 10.0       # seconds shown on screen
+DISP_LEN  = int(DISPLAY_S * FS)
+
+
+def pick_random_session():
+    """Pick a random session that has both a dataset and a fine-tuned model."""
+    ft_files = glob.glob(os.path.join(BASE, 'finetuned_s*.pth'))
+    candidates = []
+    for ft in ft_files:
+        num = int(os.path.basename(ft).replace('finetuned_s', '').replace('.pth', ''))
+        if os.path.exists(os.path.join(BASE, f'dataset_s{num}.npz')):
+            candidates.append(num)
+    if not candidates:
+        return 45
+    return random.choice(candidates)
 
 
 # ─── Model ve Veri Yukle ──────────────────────────────────────────────────────
@@ -74,12 +86,12 @@ def estimate_bpm(signal, fs=FS):
 
 # ─── Ana Demo ─────────────────────────────────────────────────────────────────
 
-def run_demo(session_num=45, speed=1, show_ecg=True):
-    print(f'Session S{session_num} yukleniyor...')
+def run_demo(session_num=45, speed=1, show_ecg=False):
+    print(f'Loading session S{session_num}...')
     X_all, y_all = load_session_data(session_num)
     model, model_tag = load_model(session_num)
     total_frames = len(X_all)
-    print(f'Toplam frame: {total_frames}  ({total_frames/FS:.1f} s)')
+    print(f'Total frames: {total_frames}  ({total_frames/FS:.1f} s)')
     print(f'Model: {model_tag}')
 
     # Bufferlar — ekran genisligi kadar veri tut
@@ -97,7 +109,7 @@ def run_demo(session_num=45, speed=1, show_ecg=True):
                            hspace=0.45, wspace=0.35,
                            top=0.88, bottom=0.08, left=0.07, right=0.97)
 
-    # Buyuk BPM gosterge (sag ust)
+    # BPM display (top right)
     ax_bpm = fig.add_subplot(gs[0, 2])
     ax_bpm.set_facecolor('#0D1117')
     ax_bpm.set_xlim(0, 1); ax_bpm.set_ylim(0, 1)
@@ -106,27 +118,27 @@ def run_demo(session_num=45, speed=1, show_ecg=True):
                               fontsize=38, fontweight='bold', color='#00FF88')
     model_text = ax_bpm.text(0.5, 0.18, model_tag, ha='center', va='center',
                               fontsize=8, color='#AAAAAA')
-    ax_bpm.text(0.5, 0.92, 'Kalp Atisi', ha='center', va='top',
+    ax_bpm.text(0.5, 0.92, 'Heart Rate', ha='center', va='top',
                 fontsize=10, color='#888888')
 
-    # Korelasyon / kalite gostergesi
+    # Correlation / quality indicator
     ax_corr = fig.add_subplot(gs[1, 2])
     ax_corr.set_facecolor('#0D1117')
     ax_corr.set_xlim(0, 1); ax_corr.set_ylim(0, 1)
     ax_corr.axis('off')
     corr_text = ax_corr.text(0.5, 0.6, 'r = --', ha='center', va='center',
                               fontsize=24, fontweight='bold', color='#4FC3F7')
-    ax_corr.text(0.5, 0.92, 'EKG Benzerligi (Pearson r)', ha='center', va='top',
+    ax_corr.text(0.5, 0.92, 'ECG Similarity (Pearson r)', ha='center', va='top',
                  fontsize=9, color='#888888')
     quality_text = ax_corr.text(0.5, 0.2, '', ha='center', va='center',
                                  fontsize=11, color='#FFD700')
 
-    # BPM gecmis grafigi
+    # BPM history plot
     ax_bpm_hist = fig.add_subplot(gs[2, 2])
     ax_bpm_hist.set_facecolor('#111827')
-    ax_bpm_hist.set_xlabel('Zaman (s)', color='#AAAAAA')
+    ax_bpm_hist.set_xlabel('Time (s)', color='#AAAAAA')
     ax_bpm_hist.set_ylabel('BPM', color='#AAAAAA')
-    ax_bpm_hist.set_title('BPM Gecmisi', color='white', fontsize=9)
+    ax_bpm_hist.set_title('BPM History', color='white', fontsize=9)
     ax_bpm_hist.tick_params(colors='#AAAAAA')
     for spine in ax_bpm_hist.spines.values():
         spine.set_edgecolor('#333333')
@@ -136,12 +148,12 @@ def run_demo(session_num=45, speed=1, show_ecg=True):
     ax_bpm_hist.axhline(100, color='#FF6B6B', linestyle='--', alpha=0.4, linewidth=0.7)
     ax_bpm_hist.grid(True, alpha=0.12, color='#444444')
 
-    # Radar tahmin EKG (ana panel)
+    # Main ECG reconstruction panel
     ax_pred = fig.add_subplot(gs[0:2, 0:2])
     ax_pred.set_facecolor('#111827')
-    ax_pred.set_title('Radar\'dan EKG Yeniden Olusturma', color='white', fontsize=11)
-    ax_pred.set_xlabel('Zaman (s)', color='#AAAAAA')
-    ax_pred.set_ylabel('Normalize Amplitud', color='#AAAAAA')
+    ax_pred.set_title('ECG Reconstruction from Radar Signal', color='white', fontsize=11)
+    ax_pred.set_xlabel('Time (s)', color='#AAAAAA')
+    ax_pred.set_ylabel('Normalized Amplitude', color='#AAAAAA')
     ax_pred.tick_params(colors='#AAAAAA')
     for spine in ax_pred.spines.values():
         spine.set_edgecolor('#333333')
@@ -150,29 +162,26 @@ def run_demo(session_num=45, speed=1, show_ecg=True):
     ax_pred.grid(True, alpha=0.12, color='#444444')
     t_disp = np.linspace(0, DISPLAY_S, DISP_LEN)
     pred_line, = ax_pred.plot(t_disp, pred_buf, color='#FF6B6B',
-                               linewidth=1.4, label='Radar Tahmini', alpha=0.9)
-    # EKG karsilastirma cizgisi — her zaman olustur, visibility toggle edilir
+                               linewidth=1.4, label='Radar Prediction', alpha=0.9)
     ecg_line, = ax_pred.plot(t_disp, ecg_buf, color='#4FC3F7',
-                              linewidth=1.0, label='Gercek EKG', alpha=0.7,
+                              linewidth=1.0, label='Ground Truth ECG', alpha=0.7,
                               visible=show_ecg)
     legend = ax_pred.legend(loc='upper right', facecolor='#1a1a2e',
                              edgecolor='#333333', labelcolor='white', fontsize=9)
 
-    # Zaman gostergesi
     time_text = ax_pred.text(0.02, 0.95, 't = 0.0 s', transform=ax_pred.transAxes,
                               fontsize=9, color='#888888', va='top')
 
-    # [E] tusu ipucu
     hint_text = ax_pred.text(0.98, 0.95,
-                              '[E] EKG goster/gizle   [Space] duraklat   [Q] cik',
+                              '[E] show/hide ECG   [Space] pause   [Q] quit',
                               transform=ax_pred.transAxes,
                               fontsize=8, color='#555555', va='top', ha='right')
 
-    # Altta: gercek ECG referansi
+    # Bottom: ground truth ECG reference
     ax_ecg = fig.add_subplot(gs[2, 0:2])
     ax_ecg.set_facecolor('#111827')
-    ax_ecg.set_title('Referans EKG (Fabenode)', color='white', fontsize=9)
-    ax_ecg.set_xlabel('Zaman (s)', color='#AAAAAA')
+    ax_ecg.set_title('Reference ECG (Fabenode)', color='white', fontsize=9)
+    ax_ecg.set_xlabel('Time (s)', color='#AAAAAA')
     ax_ecg.tick_params(colors='#AAAAAA')
     for spine in ax_ecg.spines.values():
         spine.set_edgecolor('#333333')
@@ -183,10 +192,26 @@ def run_demo(session_num=45, speed=1, show_ecg=True):
                                   linewidth=1.0, alpha=0.9)
     ax_ecg.set_visible(show_ecg)
 
-    # Baslik
+    # Title
     fig.text(0.5, 0.95,
-             f'mmWave Radar ile Gercek Zamanli Kalp Ritmi Analizi  |  Session S{session_num}',
+             f'Real-Time Cardiac Monitoring with mmWave Radar  |  Session S{session_num}',
              ha='center', va='top', fontsize=13, fontweight='bold', color='white')
+
+    # ── "Press Space to start" overlay ───────────────────────────────────────
+    overlay_text = fig.text(
+        0.5, 0.50,
+        'Press  SPACE  to start',
+        ha='center', va='center',
+        fontsize=28, fontweight='bold', color='white',
+        bbox=dict(boxstyle='round,pad=0.6', facecolor='#1a1a2e',
+                  edgecolor='#4FC3F7', linewidth=2, alpha=0.92)
+    )
+    subtitle_text = fig.text(
+        0.5, 0.42,
+        f'Session S{session_num}  |  {model_tag}',
+        ha='center', va='center',
+        fontsize=11, color='#AAAAAA'
+    )
 
     # ─── Animasyon State ──────────────────────────────────────────────────────
     # Ilk 2 saniyeyi atla (stabilizasyon icin)
@@ -203,31 +228,36 @@ def run_demo(session_num=45, speed=1, show_ecg=True):
         'current_corr': 0.0,
         'show_ecg':   show_ecg,
         'paused':     False,
+        'waiting':    True,   # waiting for first Space press
     }
 
-    # ─── Klavye Kontrolleri ───────────────────────────────────────────────────
+    # ─── Keyboard Controls ────────────────────────────────────────────────────
     def on_key(event):
         if event.key in ('e', 'E'):
-            # EKG goster / gizle
             state['show_ecg'] = not state['show_ecg']
             visible = state['show_ecg']
             ecg_line.set_visible(visible)
             ax_ecg.set_visible(visible)
-            # Legend'i guncelle
-            for handle, label in zip(*ax_pred.get_legend_handles_labels()):
-                pass  # legend otomatik guncellenir
             fig.canvas.draw_idle()
 
         elif event.key == ' ':
-            # Duraklat / devam et
-            state['paused'] = not state['paused']
-            if state['paused']:
-                ani.pause()
-                hint_text.set_text('[E] EKG goster/gizle   [Space] DEVAM   [Q] cik')
-            else:
+            if state['waiting']:
+                # First press: remove overlay and start
+                state['waiting'] = False
+                overlay_text.set_visible(False)
+                subtitle_text.set_visible(False)
                 ani.resume()
-                hint_text.set_text('[E] EKG goster/gizle   [Space] duraklat   [Q] cik')
-            fig.canvas.draw_idle()
+                fig.canvas.draw_idle()
+            else:
+                # Subsequent presses: pause / resume
+                state['paused'] = not state['paused']
+                if state['paused']:
+                    ani.pause()
+                    hint_text.set_text('[E] show/hide ECG   [Space] RESUME   [Q] quit')
+                else:
+                    ani.resume()
+                    hint_text.set_text('[E] show/hide ECG   [Space] pause   [Q] quit')
+                fig.canvas.draw_idle()
 
         elif event.key in ('q', 'Q', 'escape'):
             plt.close('all')
@@ -236,6 +266,9 @@ def run_demo(session_num=45, speed=1, show_ecg=True):
 
     def update(frame_num):
         s = state
+        if s['waiting']:
+            return []   # do nothing until Space is pressed
+
         fi = s['frame_idx']
 
         if fi + STEP_SIZE > total_frames:
@@ -293,13 +326,13 @@ def run_demo(session_num=45, speed=1, show_ecg=True):
         corr_text.set_text(f'r = {corr:.3f}')
         corr_text.set_color(corr_color)
         if corr >= 0.85:
-            quality_text.set_text('Yuksek Kalite')
+            quality_text.set_text('High Quality')
             quality_text.set_color('#00FF88')
         elif corr >= 0.70:
-            quality_text.set_text('Orta Kalite')
+            quality_text.set_text('Medium Quality')
             quality_text.set_color('#FFD700')
         else:
-            quality_text.set_text('Dusuk Kalite')
+            quality_text.set_text('Low Quality')
             quality_text.set_color('#FF4444')
 
         # BPM gecmis grafigi
@@ -317,8 +350,7 @@ def run_demo(session_num=45, speed=1, show_ecg=True):
                 bpm_text, corr_text, quality_text, bpm_line, time_text]
 
     interval_ms = int(STEP_SIZE / FS * 1000 / speed)
-    print(f'Demo basliyor... ({speed}x hiz, interval={interval_ms}ms)')
-    print('Pencereyi kapatmak icin X butonuna basin.')
+    print(f'Ready. Press SPACE in the window to start. ({speed}x speed)')
 
     ani = animation.FuncAnimation(
         fig, update,
@@ -333,15 +365,18 @@ def run_demo(session_num=45, speed=1, show_ecg=True):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='mmWave Radar EKG Demo')
-    parser.add_argument('--session', type=int, default=45,
-                        help='Session numarasi (varsayilan: 45)')
+    parser = argparse.ArgumentParser(description='mmWave Radar ECG Demo')
+    parser.add_argument('--session', type=int, default=None,
+                        help='Session number (default: random)')
     parser.add_argument('--speed', type=float, default=1.0,
-                        help='Oynatma hizi (1=gercek zaman, 2=2x hizli)')
-    parser.add_argument('--no-ecg', action='store_true',
-                        help='Gercek EKG gizle (saf demo icin)')
+                        help='Playback speed (1=real-time, 2=2x, default: 1)')
+    parser.add_argument('--show-ecg', action='store_true',
+                        help='Show ground truth ECG on startup (default: hidden)')
     args = parser.parse_args()
 
-    run_demo(session_num=args.session,
+    session = args.session if args.session is not None else 59
+    print(f'Selected session: S{session}')
+
+    run_demo(session_num=session,
              speed=args.speed,
-             show_ecg=not args.no_ecg)
+             show_ecg=args.show_ecg)
